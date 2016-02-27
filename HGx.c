@@ -1,15 +1,17 @@
 #include "HGx.h"
 
-ulong iteration = 0;
+#define smalloc(ptr, size) 	ptr = malloc(size);\
+							if(!ptr) exit(1);
 
 int openHGx(const char *filename)
 {
 	int fd;
-	char *baseName = NULL;
+	char *baseName = NULL, *outName = NULL;
 	HGxHeader    fileHdr;
 	HG3Tag       tag;
 	HG3StdInfo   stdInfo;
 	HG3ImgHeader imgHdr;
+    ulong iteration = 0;
 
 	fd = open(filename, O_RDONLY | O_BINARY);
 	if(!fd)
@@ -19,48 +21,54 @@ int openHGx(const char *filename)
 	}
 	baseName = strdup(filename);
 	baseName[strlen(baseName) - 3] = 0;
-	iteration = 0;
+	smalloc(outName, strlen(baseName) + 8);
 
 	read(fd, &fileHdr, sizeof(fileHdr));
 	if(!memcmp(fileHdr.magic, "HG-3", 4)) //Seems like a correct HG3 file for now
 	{
-		do {
-			read(fd, &tag, sizeof(tag));
-		} while(memcmp(tag.name, "stdinfo", 7));
-		if(tag.length != sizeof(stdInfo))
-		{
-			fprintf(stderr, "stdinfo size mismatch.\nExpected %lu, got %lu.\n", (ulong)sizeof(stdInfo), tag.length);
-			return 1;
-		}
-		read(fd, &stdInfo, sizeof(stdInfo));
-		while(tag.offsetNextTag)
-		{
-			read(fd, &tag, sizeof(tag));
-			if(!memcmp(tag.name, "img0000", 7))
-			{
-				read(fd, &imgHdr, sizeof(imgHdr));
-				readHG3Image(fd, stdInfo, imgHdr, baseName);
-			} else {
-				//Save unknown data to file
-			}
-		}
+		while(1)
+        {
+            memset(&tag, 0, sizeof(tag));
+            read(fd, &tag, sizeof(tag));
+            if(memcmp(tag.name, "stdinfo", 7))
+                break;
+            if(tag.length != sizeof(stdInfo))
+            {
+                fprintf(stderr, "stdinfo size mismatch.\nExpected %lu, got %lu.\n", (ulong)sizeof(stdInfo), tag.length);
+                return 1;
+            }
+            read(fd, &stdInfo, sizeof(stdInfo));
+            while(tag.offsetNextTag)
+            {
+                read(fd, &tag, sizeof(tag));
+                //printf("Read %s\n", tag.name);
+                if(!memcmp(tag.name, "img0000", 7))
+                {
+                    read(fd, &imgHdr, sizeof(imgHdr));
+                    sprintf(outName, "%s%03lu.ppm", baseName, iteration);
+                    readHG3Image(fd, stdInfo, imgHdr, outName);
+                    iteration++;
+                } else {
+                    //Save unknown data to file
+                }
+            }
+            lseek(fd, 12, SEEK_CUR);
+        }
 	} else {
-		fprintf(stderr, "File is not HG3.");
+		fprintf(stderr, "File is not HG3. (%s)\n", fileHdr.magic);
 		return 1;
 	}
 	close(fd);
+	free(outName);
+	free(baseName);
 	return 0;
 }
 
-#define smalloc(ptr, size) 	ptr = malloc(size);\
-							if(!ptr) exit(1);
-
-void readHG3Image(int fd, HG3StdInfo stdInfo, HG3ImgHeader imgHdr, char *baseName)
+void readHG3Image(int fd, HG3StdInfo stdInfo, HG3ImgHeader imgHdr, char *outName)
 {
 	uchar *tempBuff = NULL, *buff = NULL, *cmdBuff = NULL, *RGBABuff = NULL, *outBuff = NULL;
 	ulong originalLen = imgHdr.originalLen, originalCmdLen = imgHdr.originalCmdLen, outLen;
 	int err;
-	char outName[255];
 
 	smalloc(tempBuff, imgHdr.compressedLen);
 	smalloc(buff, imgHdr.originalLen);
@@ -90,9 +98,7 @@ void readHG3Image(int fd, HG3StdInfo stdInfo, HG3ImgHeader imgHdr, char *baseNam
 	smalloc(RGBABuff, outLen);
 	unDelta(outBuff, outLen, stdInfo.width, stdInfo.height, stdInfo.bpp / 8, RGBABuff);
 
-    sprintf(outName, "%s%03lu.ppm", baseName, iteration);
-    iteration++;
-    saveImage(RGBABuff, stdInfo.width, stdInfo.height, outName);
+	saveImage(RGBABuff, stdInfo.width, stdInfo.height, outName);
 
 	free(buff);
 	free(cmdBuff);
